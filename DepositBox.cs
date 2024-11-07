@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization; // For CultureInfo
+using System.Linq;
 using Newtonsoft.Json;
 using Oxide.Core;
 using Oxide.Core.Libraries.Covalence;
 
 namespace Oxide.Plugins
 {
-    [Info("DepositBox", "rustysats", "0.1.0")]
+    [Info("DepositBox", "rustysats", "0.2.0")]
     [Description("Drop box that registers drops for admin while removing items from the game.")]
     internal class DepositBox : RustPlugin
     {
@@ -15,8 +16,10 @@ namespace Oxide.Plugins
         // Configuration variables
         private int DepositItemID;
         private ulong DepositBoxSkinID;
-        // Permission constant
+        // Permission constants
         private const string permPlace = "depositbox.place";
+        private const string permCheck = "depositbox.check";
+        private const string permAdminCheck = "depositbox.admincheck";
         private DepositLog depositLog;
         private Dictionary<Item, BasePlayer> depositTrack = new Dictionary<Item, BasePlayer>(); // Track deposits
 
@@ -27,6 +30,8 @@ namespace Oxide.Plugins
             LoadConfiguration();
             LoadDepositLog();
             permission.RegisterPermission(permPlace, this);
+            permission.RegisterPermission(permCheck, this);
+            permission.RegisterPermission(permAdminCheck, this);
         }
 
         protected override void LoadDefaultConfig()
@@ -83,6 +88,65 @@ namespace Oxide.Plugins
             }
             player.inventory.containerMain.GiveItem(ItemManager.CreateByItemID(833533164, 1, DepositBoxSkinID));
             player.ChatMessage(lang.GetMessage("BoxGiven", this, player.UserIDString));
+        }
+
+        [ChatCommand("checkdeposits")]
+        private void CheckDepositsCommand(BasePlayer player, string command, string[] args)
+        {
+            if (!permission.UserHasPermission(player.UserIDString, permCheck))
+            {
+                player.ChatMessage(lang.GetMessage("NoCheckPermission", this, player.UserIDString));
+                return;
+            }
+
+            if (depositLog == null || depositLog.Deposits.Count == 0)
+            {
+                player.ChatMessage(lang.GetMessage("NoDepositData", this, player.UserIDString));
+                return;
+            }
+
+            // Group the deposits by SteamID and calculate the total amount deposited for each player
+            var depositSummary = depositLog.Deposits
+                .GroupBy(entry => entry.SteamId)
+                .Select(group => new
+                {
+                    SteamId = group.Key,
+                    TotalAmount = group.Sum(entry => entry.AmountDeposited)
+                })
+                .ToList();
+
+            // Calculate the total amount deposited by all players
+            int totalDeposited = depositSummary.Sum(summary => summary.TotalAmount);
+
+            // Find the current player's total deposits
+            var playerSummary = depositSummary.FirstOrDefault(summary => summary.SteamId == player.UserIDString);
+
+            if (playerSummary != null)
+            {
+                // Calculate the percentage of total deposits for the current player
+                double percentageOfTotal = ((double)playerSummary.TotalAmount / totalDeposited) * 100;
+                player.ChatMessage(lang.GetMessage("PlayerDepositSummary", this, player.UserIDString)
+                    .Replace("{amount}", playerSummary.TotalAmount.ToString(CultureInfo.InvariantCulture))
+                    .Replace("{percentage}", percentageOfTotal.ToString("F2", CultureInfo.InvariantCulture)));
+            }
+            else
+            {
+                player.ChatMessage(lang.GetMessage("NoPlayerDeposits", this, player.UserIDString));
+            }
+
+            // Admin view if player has both permissions
+            if (permission.UserHasPermission(player.UserIDString, permAdminCheck))
+            {
+                player.ChatMessage(lang.GetMessage("DepositTotals", this, player.UserIDString));
+                foreach (var summary in depositSummary)
+                {
+                    double percentage = ((double)summary.TotalAmount / totalDeposited) * 100;
+                    player.ChatMessage(lang.GetMessage("DepositEntrySummary", this, player.UserIDString)
+                        .Replace("{steamid}", summary.SteamId)
+                        .Replace("{amount}", summary.TotalAmount.ToString(CultureInfo.InvariantCulture))
+                        .Replace("{percentage}", percentage.ToString("F2", CultureInfo.InvariantCulture)));
+                }
+            }
         }
         #endregion
 
@@ -206,7 +270,13 @@ namespace Oxide.Plugins
                 ["NoPermission"] = "You do not have permission to place this box.",
                 ["BoxGiven"] = "You have received a Deposit Box.",
                 ["DepositRecorded"] = "Your deposit of {amount} has been recorded.",
-                ["PlacedNoPerm"] = "You have placed a deposit box but lack permission to place it."
+                ["PlacedNoPerm"] = "You have placed a deposit box but lack permission to place it.",
+                ["NoCheckPermission"] = "You do not have permission to check deposits.",
+                ["NoDepositData"] = "No deposit data found.",
+                ["PlayerDepositSummary"] = "You have deposited a total of {amount} items, which is {percentage}% of all deposits.",
+                ["NoPlayerDeposits"] = "You have not made any deposits.",
+                ["DepositTotals"] = "Deposit Totals:",
+                ["DepositEntrySummary"] = "SteamID: {steamid}, Total Deposited: {amount}, {percentage}% of total."
             }, this);
         }
         #endregion
