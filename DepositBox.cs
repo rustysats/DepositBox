@@ -213,26 +213,31 @@ namespace Oxide.Plugins
 
         public void LogDeposit(BasePlayer player, int amount)
         {
-            if (player == null)
-            {
-                PrintError("LogDeposit called with a null player.");
-                return;
-            }
-
-            var entry = new DepositEntry
+            // Record this deposit
+            depositLog.Deposits.Add(new DepositEntry
             {
                 SteamId = player.UserIDString,
-                Timestamp = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture), // Specified CultureInfo
+                Timestamp = DateTime.UtcNow.ToString("o"),
                 AmountDeposited = amount
-            };
-            Puts($"Logging deposit: SteamID={entry.SteamId}, Amount={entry.AmountDeposited}, Timestamp={entry.Timestamp}");
-            depositLog.Deposits.Add(entry);
-            SaveDepositLog();
-
-            // Send message to the player
-            string message = lang.GetMessage("DepositRecorded", this, player.UserIDString)
-                .Replace("{amount}", amount.ToString(CultureInfo.InvariantCulture));
-            player.ChatMessage(message);
+            });
+            SaveDepositLog(); // Save the log after recording the deposit
+        
+            // Calculate the player's total deposits
+            int playerTotalDeposits = depositLog.Deposits
+                .Where(entry => entry.SteamId == player.UserIDString)
+                .Sum(entry => entry.AmountDeposited);
+        
+            // Calculate the total deposits of all players
+            int totalDepositedByAllPlayers = depositLog.Deposits.Sum(entry => entry.AmountDeposited);
+        
+            // Calculate the player's percentage of all deposits
+            double playerPercentageOfTotal = ((double)playerTotalDeposits / totalDepositedByAllPlayers) * 100;
+        
+            // Send the updated deposit message to the player
+            player.ChatMessage(lang.GetMessage("DepositRecorded", this, player.UserIDString)
+                .Replace("{amount}", amount.ToString(CultureInfo.InvariantCulture))
+                .Replace("{total_amount}", playerTotalDeposits.ToString(CultureInfo.InvariantCulture))
+                .Replace("{percentage}", playerPercentageOfTotal.ToString("F2", CultureInfo.InvariantCulture)));
         }
 
         public void TrackDeposit(Item item, BasePlayer player)
@@ -269,7 +274,7 @@ namespace Oxide.Plugins
             {
                 ["NoPermission"] = "You do not have permission to place this box.",
                 ["BoxGiven"] = "You have received a Deposit Box.",
-                ["DepositRecorded"] = "Your deposit of {amount} has been recorded.",
+                ["DepositRecorded"] = "Your deposit of {amount} has been recorded. You have deposited a total of {total_amount} items, which is {percentage}% of all deposits.",
                 ["PlacedNoPerm"] = "You have placed a deposit box but lack permission to place it.",
                 ["NoCheckPermission"] = "You do not have permission to check deposits.",
                 ["NoDepositData"] = "No deposit data found.",
